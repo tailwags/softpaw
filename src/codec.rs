@@ -5,23 +5,9 @@ use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug)]
 pub struct Packet {
-    payload: Bytes,
-    random_padding: Bytes,
-    mac: Option<Bytes>,
-}
-
-impl Packet {
-    pub fn payload(&self) -> &Bytes {
-        &self.payload
-    }
-
-    pub fn padding(&self) -> &Bytes {
-        &self.random_padding
-    }
-
-    pub fn mac(&self) -> Option<&Bytes> {
-        self.mac.as_ref()
-    }
+    pub payload: Bytes,
+    pub random_padding: Bytes,
+    pub mac: Option<Bytes>,
 }
 
 #[derive(Debug, Clone)]
