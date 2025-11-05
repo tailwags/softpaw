@@ -3,19 +3,36 @@ name = "softpaw"
 version = "0.1.0"
 edition = "2024"
 
+
+[[bin]]
+name = "ssh"
+required-features = ["bin"]
+
+[features]
+bin = [
+    "tracing",
+    "dep:anyhow",
+    "dep:tracing-subscriber",
+    "dep:tokio-stream",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+]
+tracing = ["dep:tracing"]
+
+
 [dependencies]
-anyhow = "1.0.100"
+# Core dep
+tokio = { version = "1.48.0", features = ["io-util", "net"] }
 bytes = "1.10.1"
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = [
-    "io-util",
-    "macros",
-    "net",
-    "rt-multi-thread",
-] }
-tokio-stream = { version = "0.1.17", default-features = false }
 tokio-util = { version = "0.7.17", features = [
     "codec",
 ], default-features = false }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.20"
+
+# Optional dep
+tracing = { version = "0.1.41", optional = true }
+
+# Binary dep
+anyhow = { version = "1.0.100", optional = true }
+tracing-subscriber = { version = "0.3.20", optional = true }
+tokio-stream = { version = "0.1.17", default-features = false, optional = true }
