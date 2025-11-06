@@ -1,12 +1,12 @@
 use std::io::{self, Cursor};
 
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug)]
 pub struct Packet {
     pub payload: Bytes,
-    pub random_padding: Bytes,
     pub mac: Option<Bytes>,
 }
 
@@ -18,6 +18,10 @@ pub struct PacketCodec {
     max_packet_size: usize,
     /// Length of MAC field
     mac_length: usize,
+    /// Cipher block size: 0 = no encryption, otherwise the cipher's block size
+    cipher_block_size: usize,
+    // Used for generating random padding
+    rng_provider: SystemRandom,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,12 +32,15 @@ enum DecodeState {
 
 impl PacketCodec {
     const HEAD_SIZE: usize = 4;
+    const MIN_BLOCK_SIZE: usize = 8;
 
     pub fn new(max_packet_size: usize, mac_length: usize) -> Self {
         Self {
             state: DecodeState::Head,
             max_packet_size,
             mac_length,
+            cipher_block_size: 0,
+            rng_provider: SystemRandom::new(),
         }
     }
 
@@ -45,12 +52,20 @@ impl PacketCodec {
         self.mac_length
     }
 
+    pub fn cipher_block_size(&self) -> usize {
+        self.cipher_block_size
+    }
+
     pub fn set_max_packet_size(&mut self, val: usize) {
         self.max_packet_size = val;
     }
 
     pub fn set_mac_length(&mut self, mac_length: usize) {
         self.mac_length = mac_length;
+    }
+
+    pub fn set_cipher_block_size(&mut self, block_size: usize) {
+        self.cipher_block_size = block_size;
     }
 
     fn decode_head(&mut self, src: &mut BytesMut) -> io::Result<Option<usize>> {
@@ -102,6 +117,30 @@ impl PacketCodec {
 
         Some(src.split_to(n))
     }
+
+    fn calculate_padding_length(&self, payload_len: usize) -> u8 {
+        // Determine effective block size
+        let block_size = if self.cipher_block_size == 0 {
+            Self::MIN_BLOCK_SIZE // No encryption: use RFC minimum of 8
+        } else {
+            self.cipher_block_size.max(Self::MIN_BLOCK_SIZE)
+        };
+
+        let block_size = block_size.max(8);
+
+        // Current length: 4 bytes (packet_length) + 1 byte (padding_length) + payload
+        let current_len = 4 + 1 + payload_len;
+
+        // Calculate padding needed to reach next block boundary
+        let mut padding_len = block_size - (current_len % block_size);
+
+        // Ensure minimum padding of 4 bytes
+        if padding_len < 4 {
+            padding_len += block_size;
+        }
+
+        padding_len as u8
+    }
 }
 
 impl Decoder for PacketCodec {
@@ -134,7 +173,8 @@ impl Decoder for PacketCodec {
                 let n1 = packet_length - (padding_length as u32) - 1;
 
                 let payload = packet.copy_to_bytes(n1 as usize);
-                let random_padding = packet.copy_to_bytes(padding_length as usize);
+
+                packet.advance(padding_length as usize); // Skip random padding
 
                 let mac = if self.mac_length > 0 {
                     Some(packet.copy_to_bytes(self.mac_length))
@@ -142,11 +182,7 @@ impl Decoder for PacketCodec {
                     None
                 };
 
-                let packet = Packet {
-                    payload,
-                    random_padding,
-                    mac,
-                };
+                let packet = Packet { payload, mac };
 
                 Ok(Some(packet))
             }
@@ -154,14 +190,15 @@ impl Decoder for PacketCodec {
         }
     }
 }
-
-impl Encoder<Bytes> for PacketCodec {
+impl Encoder<Packet> for PacketCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, data: Bytes, dst: &mut BytesMut) -> Result<(), io::Error> {
-        let data_len = data.len();
+    fn encode(&mut self, packet: Packet, dst: &mut BytesMut) -> Result<(), io::Error> {
+        let Packet { payload, mac: _mac } = packet;
 
-        let total_size = 4 + data_len + self.mac_length;
+        let padding_length = self.calculate_padding_length(payload.len());
+        let packet_length = 1 + payload.len() + padding_length as usize;
+        let total_size = 4 + packet_length + self.mac_length;
 
         if total_size > self.max_packet_size {
             return Err(io::Error::new(
@@ -170,11 +207,24 @@ impl Encoder<Bytes> for PacketCodec {
             ));
         }
 
-        dst.reserve(8);
+        dst.reserve(total_size);
+        dst.put_u32(packet_length as u32);
+        dst.put_u8(padding_length);
+        dst.extend_from_slice(&payload[..]);
 
-        dst.put_u32(data_len as u32);
+        // Write padding: random if encrypted, zeros before encryption
+        if self.cipher_block_size == 0 {
+            // No encryption: zero padding (like OpenSSH)
+            dst.put_bytes(0, padding_length as usize);
+        } else {
+            let mut padding = vec![0u8; padding_length as usize];
 
-        dst.extend_from_slice(&data[..]);
+            self.rng_provider
+                .fill(&mut padding)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("RNG error: {:?}", e)))?;
+
+            dst.extend_from_slice(&padding);
+        }
 
         Ok(())
     }

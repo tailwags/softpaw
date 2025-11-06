@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures_util::SinkExt;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
@@ -7,7 +8,10 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::Framed;
 use tracing::debug;
 
-use softpaw::{codec::PacketCodec, message::Message};
+use softpaw::{
+    codec::{Packet, PacketCodec},
+    message::{Disconnect, Message, ReasonCode},
+};
 
 // SSH-protoversion-softwareversion SP comments CR LF
 const VERSION: &str = "SSH-2.0-softpaw_0.1.0 \r\n";
@@ -35,7 +39,20 @@ async fn main() -> Result<()> {
     while let Some(mut packet) = framed.try_next().await? {
         let message = Message::parse(&mut packet.payload)?;
 
-        dbg!(message);
+        let disconnect = Disconnect {
+            reason_code: ReasonCode::ByApplication,
+            description: "baibai >~<".to_owned(),
+            language_tag: String::new(),
+        };
+
+        framed
+            .send(Packet {
+                payload: disconnect.into_payload(),
+                mac: None,
+            })
+            .await?;
+
+        break;
     }
 
     Ok(())
