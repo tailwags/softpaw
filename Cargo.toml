@@ -36,3 +36,5 @@ tracing = { version = "0.1.41", optional = true }
 anyhow = { version = "1.0.100", optional = true }
 tracing-subscriber = { version = "0.3.20", optional = true }
 tokio-stream = { version = "0.1.17", default-features = false, optional = true }
+futures-util = { version = "0.3.31", default-features = false, features = ["sink"] }
+aws-lc-rs = { version = "1.14.1", default-features = false, features = ["aws-lc-sys"] }
